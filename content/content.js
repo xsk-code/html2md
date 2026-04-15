@@ -952,22 +952,7 @@ class Html2MdConverter {
     
     processed = this.removeDuplicateImageAndText(processed);
     
-    processed = processed.replace(/^\s*\d+\s*字\s*$/gm, '');
-    processed = processed.replace(/^\s*\d+%\s*$/gm, '');
-    
-    processed = processed.replace(/^.*反向引用.*$/gm, '');
-    processed = processed.replace(/^.*本文引用.*$/gm, '');
-    processed = processed.replace(/^.*关系图.*$/gm, '');
-    processed = processed.replace(/^.*推荐内容.*$/gm, '');
-    processed = processed.replace(/^.*人点赞.*$/gm, '');
-    processed = processed.replace(/^.*本文暂未被.*$/gm, '');
-    processed = processed.replace(/^.*评论.*$/gm, '');
-    processed = processed.replace(/^.*点赞.*$/gm, '');
-    processed = processed.replace(/^.*分享.*$/gm, '');
-    processed = processed.replace(/^.*收藏.*$/gm, '');
-    processed = processed.replace(/^.*关注.*$/gm, '');
-    
-    processed = processed.replace(/^[-*+]\s*.*?(?:点赞|评论|分享|收藏|关注|推荐|引用|反向).*$/gm, '');
+    processed = this.filterUnwantedContent(processed);
     
     processed = this.fixListFormatting(processed);
     
@@ -991,7 +976,6 @@ class Html2MdConverter {
   removeDuplicateImageAndText(markdown) {
     const lines = markdown.split('\n');
     const result = [];
-    const seenTexts = new Set();
     let lastImageAlt = '';
     
     for (let i = 0; i < lines.length; i++) {
@@ -1009,12 +993,62 @@ class Html2MdConverter {
         continue;
       }
       
-      if (trimmedLine.length > 10) {
-        const textHash = this.simpleHash(trimmedLine);
-        if (seenTexts.has(textHash)) {
-          continue;
+      result.push(line);
+    }
+    
+    return result.join('\n');
+  }
+
+  filterUnwantedContent(markdown) {
+    const lines = markdown.split('\n');
+    const result = [];
+    
+    const unwantedPatterns = [
+      /^\s*\d+\s*字\s*$/,
+      /^\s*\d+%\s*$/,
+      /^.*反向引用.*$/,
+      /^.*本文引用.*$/,
+      /^.*关系图.*$/,
+      /^.*推荐内容.*$/,
+      /^.*人点赞.*$/,
+      /^.*本文暂未被.*$/,
+      /^.*评论.*$/,
+      /^.*点赞.*$/,
+      /^.*分享.*$/,
+      /^.*收藏.*$/,
+      /^.*关注.*$/,
+      /^[-*+]\s*.*?(?:点赞|评论|分享|收藏|关注|推荐|引用|反向).*$/,
+      /^.*AI 生成.*$/,
+      /^.*全文评论.*$/,
+      /^.*取消.*$/,
+      /^.*发送.*$/,
+      /^.*修改.*$/,
+      /^.*感谢分享.*$/,
+      /^.*太强大.*$/,
+      /^.*醍醐灌顶.*$/,
+      /^.*谢谢.*分享.*$/,
+      /^.*百科全书.*$/,
+      /^.*很有收获.*$/
+    ];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      
+      if (trimmed.length === 0) {
+        result.push(line);
+        continue;
+      }
+      
+      let isUnwanted = false;
+      for (const pattern of unwantedPatterns) {
+        if (pattern.test(trimmed)) {
+          isUnwanted = true;
+          break;
         }
-        seenTexts.add(textHash);
+      }
+      
+      if (isUnwanted) {
+        continue;
       }
       
       result.push(line);
@@ -1089,11 +1123,11 @@ class Html2MdConverter {
         continue;
       }
       
-      if (/^[\d\s%\-+•*]+$/.test(trimmed) && trimmed.length < 20) {
+      if (/^[\d\s%\-+•*]+$/.test(trimmed) && trimmed.length < 10) {
         continue;
       }
       
-      if (/^\d+$/.test(trimmed) && trimmed.length < 5) {
+      if (/^\d+$/.test(trimmed) && trimmed.length < 4) {
         continue;
       }
       
@@ -1117,20 +1151,38 @@ class Html2MdConverter {
     
     for (const line of lines) {
       const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      const feishuHeaderMatch = line.match(/^([一二三四五六七八九十]+[、.．]\s*.+)$/);
+      const feishuSubHeaderMatch = line.match(/^（[一二三四五六七八九十]+[）)]\s*.+)$/);
       
-      if (headerMatch) {
+      if (headerMatch || feishuHeaderMatch || feishuSubHeaderMatch) {
         if (currentSection.length > 0) {
-          const sectionKey = this.simpleHash(currentSection.join('\n').substring(0, 500));
-          if (!seenParagraphs.has(sectionKey)) {
-            seenParagraphs.add(sectionKey);
+          const sectionText = currentSection.join('\n').trim();
+          if (sectionText.length > 50) {
+            const sectionKey = this.simpleHash(sectionText.substring(0, Math.min(300, sectionText.length)));
+            if (!seenParagraphs.has(sectionKey)) {
+              seenParagraphs.add(sectionKey);
+              result.push(...currentSection);
+            }
+          } else {
             result.push(...currentSection);
           }
           currentSection = [];
         }
         
-        const headerLevel = headerMatch[1].length;
-        const headerText = headerMatch[2].trim();
-        const headerKey = `${headerLevel}:${headerText}`;
+        let headerText = '';
+        let headerKey = '';
+        
+        if (headerMatch) {
+          const headerLevel = headerMatch[1].length;
+          headerText = headerMatch[2].trim();
+          headerKey = `${headerLevel}:${headerText}`;
+        } else if (feishuHeaderMatch) {
+          headerText = feishuHeaderMatch[0].trim();
+          headerKey = `feishu:${headerText}`;
+        } else if (feishuSubHeaderMatch) {
+          headerText = feishuSubHeaderMatch[0].trim();
+          headerKey = `feishu-sub:${headerText}`;
+        }
         
         if (seenHeaders.has(headerKey)) {
           currentHeader = null;
@@ -1152,8 +1204,8 @@ class Html2MdConverter {
     }
     
     if (currentSection.length > 0) {
-      const sectionKey = this.simpleHash(currentSection.join('\n').substring(0, 500));
-      if (!seenParagraphs.has(sectionKey)) {
+      const sectionText = currentSection.join('\n').trim();
+      if (sectionText.length > 0) {
         result.push(...currentSection);
       }
     }
@@ -1174,7 +1226,18 @@ class Html2MdConverter {
       /^[-*+]\s*.*?(?:点赞|评论|分享|收藏|关注|推荐|引用|反向)/,
       /^\d+\s*$/,
       /^[-*+]\s*$/,
-      /^[>|]\s*$/
+      /^[>|]\s*$/,
+      /^AI 生成/,
+      /^全文评论/,
+      /^取消/,
+      /^发送/,
+      /^修改/,
+      /^感谢分享/,
+      /^太强大/,
+      /^醍醐灌顶/,
+      /^谢谢.*分享/,
+      /^百科全书/,
+      /^很有收获/
     ];
     
     for (const pattern of noisePatterns) {
