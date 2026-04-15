@@ -3,6 +3,7 @@ class Html2MdConverter {
     this.isFeishu = false;
     this.settings = {};
     this.debug = true;
+    this.collectedContent = [];
     this.init();
   }
 
@@ -46,9 +47,18 @@ class Html2MdConverter {
 
   async handleConvert(sendResponse) {
     try {
+      this.collectedContent = [];
+      
       if (this.settings.smartScroll) {
         this.log('开始智能滚动...');
-        await this.smartScroll();
+        
+        if (this.isFeishu && this.settings.feishuOptimization) {
+          this.log('使用飞书专用滚动策略...');
+          await this.feishuSmartScroll();
+        } else {
+          await this.smartScroll();
+        }
+        
         this.log('智能滚动完成');
       }
 
@@ -59,13 +69,23 @@ class Html2MdConverter {
       }
 
       this.log('开始提取内容...');
-      const html = this.extractContent();
+      let html = null;
+      
+      if (this.collectedContent.length > 0) {
+        this.log(`使用收集的内容，共 ${this.collectedContent.length} 段`);
+        html = this.collectedContent.join('\n');
+      }
+      
+      if (!html || html.length < 500) {
+        html = this.extractContent();
+      }
+      
       this.log(`内容提取完成，HTML长度: ${html?.length || 0}`);
 
       if (!html || html.length < 100) {
         this.log('警告：提取的内容过少，尝试备用方法');
         const fallbackHtml = this.extractAllVisibleText();
-        if (fallbackHtml && fallbackHtml.length > html.length) {
+        if (fallbackHtml && fallbackHtml.length > (html?.length || 0)) {
           this.log('使用备用方法提取内容');
           const markdown = this.simpleConvert(fallbackHtml);
           const title = this.getTitle();
@@ -98,6 +118,199 @@ class Html2MdConverter {
         error: error.message
       });
     }
+  }
+
+  findFeishuScrollContainer() {
+    this.log('查找飞书滚动容器...');
+    
+    const possibleSelectors = [
+      '[class*="scroll"]',
+      '[class*="virtual"]',
+      '[class*="list"]',
+      '[class*="container"]',
+      '[class*="wrapper"]',
+      '[class*="content"]',
+      '[class*="renderer"]',
+      '[class*="docx"]',
+      'main',
+      'article'
+    ];
+
+    const candidates = [];
+    
+    for (const selector of possibleSelectors) {
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
+        const style = window.getComputedStyle(el);
+        const overflowY = style.overflowY;
+        const overflow = style.overflow;
+        const height = el.offsetHeight;
+        const scrollHeight = el.scrollHeight;
+        
+        if ((overflowY === 'auto' || overflowY === 'scroll' || 
+             overflow === 'auto' || overflow === 'scroll') &&
+            scrollHeight > height) {
+          candidates.push({
+            element: el,
+            selector: selector,
+            scrollHeight: scrollHeight,
+            offsetHeight: height,
+            textLength: el.textContent?.length || 0
+          });
+        }
+      }
+    }
+
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => b.scrollHeight - a.scrollHeight);
+      this.log(`找到 ${candidates.length} 个候选滚动容器`, candidates.map(c => ({
+        selector: c.selector,
+        scrollHeight: c.scrollHeight,
+        textLength: c.textLength
+      })));
+      return candidates[0].element;
+    }
+
+    this.log('未找到明确的滚动容器，尝试查找内容区域');
+    
+    const allElements = document.querySelectorAll('*');
+    let bestContainer = null;
+    let bestScore = 0;
+
+    for (const el of allElements) {
+      const textLength = el.textContent?.length || 0;
+      const childCount = el.children?.length || 0;
+      const className = (el.className || '').toString().toLowerCase();
+      
+      let score = textLength;
+      
+      if (className.includes('content') || className.includes('doc') || 
+          className.includes('renderer') || className.includes('docx')) {
+        score *= 2;
+      }
+      
+      if (className.includes('scroll') || className.includes('virtual')) {
+        score *= 1.5;
+      }
+      
+      if (score > bestScore && textLength > 100) {
+        bestScore = score;
+        bestContainer = el;
+      }
+    }
+
+    if (bestContainer) {
+      this.log(`找到最佳内容容器，文本长度: ${bestContainer.textContent?.length}`);
+      return bestContainer;
+    }
+
+    this.log('使用document.body作为滚动容器');
+    return document.body;
+  }
+
+  async feishuSmartScroll() {
+    const container = this.findFeishuScrollContainer();
+    
+    if (!container) {
+      this.log('未找到滚动容器，使用默认滚动');
+      await this.smartScroll();
+      return;
+    }
+
+    this.log('开始飞书专用滚动...');
+    
+    const scrollStep = 300;
+    const scrollDelay = 400;
+    const maxScrolls = 300;
+    let scrollCount = 0;
+    let lastScrollTop = -1;
+    let noChangeCount = 0;
+    let collectedTexts = new Set();
+
+    const initialContent = this.extractTextFromElement(container);
+    if (initialContent.length > 0) {
+      collectedTexts.add(initialContent);
+      this.collectedContent.push(initialContent);
+      this.log(`初始内容长度: ${initialContent.length}`);
+    }
+
+    while (scrollCount < maxScrolls && noChangeCount < 8) {
+      const currentScrollTop = container.scrollTop || window.scrollY;
+      
+      if (currentScrollTop === lastScrollTop) {
+        noChangeCount++;
+        this.log(`滚动位置未变化，连续次数: ${noChangeCount}`);
+      } else {
+        noChangeCount = 0;
+        lastScrollTop = currentScrollTop;
+        
+        const currentContent = this.extractTextFromElement(container);
+        if (currentContent.length > 0 && !collectedTexts.has(currentContent)) {
+          collectedTexts.add(currentContent);
+          this.collectedContent.push(currentContent);
+          this.log(`收集新内容，当前共 ${this.collectedContent.length} 段`);
+        }
+      }
+
+      if (container === document.body) {
+        window.scrollBy(0, scrollStep);
+      } else {
+        container.scrollTop += scrollStep;
+      }
+      
+      await this.sleep(scrollDelay);
+      scrollCount++;
+    }
+
+    this.log(`飞书滚动完成，共滚动 ${scrollCount} 次，收集 ${this.collectedContent.length} 段内容`);
+    
+    if (container === document.body) {
+      window.scrollTo(0, 0);
+    } else {
+      container.scrollTop = 0;
+    }
+    
+    await this.sleep(200);
+  }
+
+  extractTextFromElement(element) {
+    if (!element) return '';
+    
+    const walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: function(node) {
+          const parent = node.parentElement;
+          if (!parent) return NodeFilter.FILTER_REJECT;
+          
+          const style = window.getComputedStyle(parent);
+          if (style.display === 'none' || style.visibility === 'hidden') {
+            return NodeFilter.FILTER_REJECT;
+          }
+          
+          const tagName = parent.tagName.toLowerCase();
+          if (['script', 'style', 'noscript', 'iframe', 'svg'].includes(tagName)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          
+          const text = node.textContent.trim();
+          if (text.length === 0) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+
+    const textNodes = [];
+    let node;
+    while (node = walker.nextNode()) {
+      textNodes.push(node.textContent.trim());
+    }
+
+    return textNodes.join('\n');
   }
 
   async smartScroll() {
