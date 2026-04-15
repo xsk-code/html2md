@@ -138,47 +138,49 @@ class Html2MdConverter {
     
     let allText = '';
     const uniqueParagraphs = new Set();
-    const skipTags = ['script', 'style', 'noscript', 'iframe', 'svg'];
+    const blockTags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'blockquote', 'table', 'ul', 'ol'];
     
     for (const content of contents) {
       const tempDiv = document.createElement('div');
       tempDiv.innerHTML = content;
+      
+      const isDescendantOfBlock = (element) => {
+        let current = element.parentElement;
+        while (current && current !== tempDiv) {
+          const tagName = current.tagName.toLowerCase();
+          if (blockTags.includes(tagName)) {
+            return true;
+          }
+          current = current.parentElement;
+        }
+        return false;
+      };
       
       const allElements = tempDiv.querySelectorAll('*');
       
       for (const el of allElements) {
         const tagName = el.tagName.toLowerCase();
         
-        if (skipTags.includes(tagName)) {
+        if (['script', 'style', 'noscript', 'iframe', 'svg'].includes(tagName)) {
           continue;
         }
         
         const text = el.textContent.trim();
         
         if (text && text.length > 5) {
-          const textHash = this.simpleHash(text);
-          
-          if (!uniqueParagraphs.has(textHash)) {
-            uniqueParagraphs.add(textHash);
+          if (blockTags.includes(tagName)) {
+            const textHash = this.simpleHash(text);
             
-            if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'blockquote', 'table', 'ul', 'ol', 'li'].includes(tagName)) {
+            if (!uniqueParagraphs.has(textHash)) {
+              uniqueParagraphs.add(textHash);
               allText += el.outerHTML + '\n';
-            } else {
-              if (tagName === 'div' || tagName === 'section' || tagName === 'article') {
-                let hasBlockChild = false;
-                for (const child of el.children) {
-                  const childTag = child.tagName.toLowerCase();
-                  if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'blockquote', 'table', 'ul', 'ol'].includes(childTag)) {
-                    hasBlockChild = true;
-                    break;
-                  }
-                }
-                if (!hasBlockChild) {
-                  allText += `<p>${text}</p>\n`;
-                }
-              } else {
-                allText += `<p>${text}</p>\n`;
-              }
+            }
+          } else if (!isDescendantOfBlock(el)) {
+            const textHash = this.simpleHash(text);
+            
+            if (!uniqueParagraphs.has(textHash)) {
+              uniqueParagraphs.add(textHash);
+              allText += `<p>${text}</p>\n`;
             }
           }
         }
@@ -361,94 +363,160 @@ class Html2MdConverter {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
     
-    const blockLevelTags = ['div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'pre', 'blockquote', 'td', 'th', 'section', 'article', 'table', 'ul', 'ol'];
-    const skipTags = ['script', 'style', 'noscript', 'iframe', 'svg'];
+    const standardBlockTags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'blockquote'];
+    const containerTags = ['table', 'ul', 'ol'];
+    const skipTags = ['script', 'style', 'noscript', 'iframe', 'svg', 'nav', 'header', 'footer'];
     
-    const findBlockAncestor = (node) => {
-      let current = node.parentElement;
-      let bestCandidate = null;
-      
+    const isDescendantOf = (element, ancestor) => {
+      let current = element.parentElement;
       while (current && current !== tempDiv) {
-        const tagName = current.tagName.toLowerCase();
-        
-        if (skipTags.includes(tagName)) {
-          return null;
+        if (current === ancestor) {
+          return true;
         }
-        
-        if (blockLevelTags.includes(tagName)) {
-          bestCandidate = current;
-        }
-        
         current = current.parentElement;
       }
-      
-      return bestCandidate || node.parentElement;
+      return false;
     };
     
-    const walker = document.createTreeWalker(
-      tempDiv,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode: (textNode) => {
-          const text = textNode.textContent.trim();
-          if (text.length === 0) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          
-          let parent = textNode.parentElement;
-          while (parent && parent !== tempDiv) {
-            const tagName = parent.tagName.toLowerCase();
-            if (skipTags.includes(tagName)) {
-              return NodeFilter.FILTER_REJECT;
-            }
-            parent = parent.parentElement;
-          }
-          
-          return NodeFilter.FILTER_ACCEPT;
+    const isDescendantOfAny = (element, elements) => {
+      for (const el of elements) {
+        if (isDescendantOf(element, el)) {
+          return true;
         }
       }
-    );
+      return false;
+    };
     
-    const seenElements = new Set();
+    const getDepth = (element) => {
+      let depth = 0;
+      let current = element.parentElement;
+      while (current && current !== tempDiv) {
+        depth++;
+        current = current.parentElement;
+      }
+      return depth;
+    };
     
-    let textNode;
-    while (textNode = walker.nextNode()) {
-      const text = textNode.textContent.trim();
-      
-      if (text.length < 5) {
-        continue;
-      }
-      
-      const blockElement = findBlockAncestor(textNode);
-      
-      if (!blockElement || seenElements.has(blockElement)) {
-        continue;
-      }
-      
-      const elementText = blockElement.textContent.trim();
-      
-      if (elementText && elementText.length > 10) {
-        seenElements.add(blockElement);
-        
-        const key = this.simpleHash(elementText.substring(0, Math.min(200, elementText.length)));
-        
-        if (!result.has(key)) {
-          result.set(key, blockElement.outerHTML);
+    const collectedElements = [];
+    
+    for (const tag of standardBlockTags) {
+      const elements = tempDiv.querySelectorAll(tag);
+      for (const el of elements) {
+        const text = el.textContent?.trim() || '';
+        if (text.length > 10) {
+          collectedElements.push({
+            element: el,
+            tagName: tag,
+            text: text,
+            isStandard: true,
+            depth: getDepth(el)
+          });
         }
       }
     }
     
-    if (result.size === 0) {
-      const importantElements = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, ul, ol');
-      
-      for (const el of importantElements) {
-        const text = el.textContent.trim();
-        if (text && text.length > 10) {
-          const key = this.simpleHash(text.substring(0, Math.min(200, text.length)));
-          if (!result.has(key)) {
-            result.set(key, el.outerHTML);
-          }
+    for (const tag of containerTags) {
+      const elements = tempDiv.querySelectorAll(tag);
+      for (const el of elements) {
+        const text = el.textContent?.trim() || '';
+        if (text.length > 10) {
+          collectedElements.push({
+            element: el,
+            tagName: tag,
+            text: text,
+            isStandard: true,
+            depth: getDepth(el)
+          });
         }
+      }
+    }
+    
+    const standardElements = collectedElements.map(c => c.element);
+    const standardTexts = collectedElements.map(c => c.text);
+    
+    const allElements = tempDiv.querySelectorAll('*');
+    
+    for (const el of allElements) {
+      const tagName = el.tagName.toLowerCase();
+      
+      if (skipTags.includes(tagName)) {
+        continue;
+      }
+      
+      if (standardBlockTags.includes(tagName) || containerTags.includes(tagName)) {
+        continue;
+      }
+      
+      if (isDescendantOfAny(el, standardElements)) {
+        continue;
+      }
+      
+      const text = el.textContent?.trim() || '';
+      
+      if (text.length < 10) {
+        continue;
+      }
+      
+      let isContained = false;
+      for (const standardText of standardTexts) {
+        if (standardText.includes(text) && standardText !== text) {
+          isContained = true;
+          break;
+        }
+      }
+      
+      if (!isContained) {
+        collectedElements.push({
+          element: el,
+          tagName: tagName,
+          text: text,
+          isStandard: false,
+          depth: getDepth(el)
+        });
+      }
+    }
+    
+    collectedElements.sort((a, b) => {
+      if (a.isStandard && !b.isStandard) return -1;
+      if (!a.isStandard && b.isStandard) return 1;
+      return a.depth - b.depth;
+    });
+    
+    const seenTexts = new Set();
+    const finalElements = [];
+    
+    for (const item of collectedElements) {
+      const { element, text, isStandard, tagName } = item;
+      
+      let isContained = false;
+      for (const seenText of seenTexts) {
+        if (seenText.includes(text) && seenText !== text) {
+          isContained = true;
+          break;
+        }
+      }
+      
+      if (!isContained && !seenTexts.has(text)) {
+        seenTexts.add(text);
+        finalElements.push({ element, text, isStandard, tagName });
+      }
+    }
+    
+    for (const item of finalElements) {
+      const { element, text, isStandard, tagName } = item;
+      
+      const key = this.simpleHash(text.substring(0, Math.min(200, text.length)));
+      
+      if (!result.has(key)) {
+        let htmlContent = '';
+        
+        if (isStandard) {
+          htmlContent = element.outerHTML;
+        } else {
+          htmlContent = `<p>${text}</p>`;
+        }
+        
+        result.set(key, htmlContent);
       }
     }
     
