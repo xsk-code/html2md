@@ -2,26 +2,42 @@ class Html2MdConverter {
   constructor() {
     this.isFeishu = false;
     this.settings = {};
+    this.debug = true;
     this.init();
+  }
+
+  log(message, data = null) {
+    if (this.debug) {
+      if (data) {
+        console.log(`[Html2Md] ${message}`, data);
+      } else {
+        console.log(`[Html2Md] ${message}`);
+      }
+    }
   }
 
   init() {
     this.detectFeishu();
     this.setupMessageListener();
+    this.log('Converter initialized');
   }
 
   detectFeishu() {
     const url = window.location.href;
     this.isFeishu = url.includes('feishu.cn') || 
                      url.includes('larksuite.com') ||
-                     document.querySelector('.feishu-doc') ||
-                     document.querySelector('[data-feishu-doc]');
+                     url.includes('bytedance.net');
+    
+    if (this.isFeishu) {
+      this.log('检测到飞书文档页面');
+    }
   }
 
   setupMessageListener() {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.action === 'convertToMarkdown') {
         this.settings = request.settings || {};
+        this.log('收到转换请求', this.settings);
         this.handleConvert(sendResponse);
         return true;
       }
@@ -31,15 +47,42 @@ class Html2MdConverter {
   async handleConvert(sendResponse) {
     try {
       if (this.settings.smartScroll) {
+        this.log('开始智能滚动...');
         await this.smartScroll();
+        this.log('智能滚动完成');
       }
 
       if (this.settings.feishuOptimization && this.isFeishu) {
+        this.log('开始飞书文档优化...');
         await this.expandFeishuContent();
+        this.log('飞书文档优化完成');
       }
 
+      this.log('开始提取内容...');
       const html = this.extractContent();
+      this.log(`内容提取完成，HTML长度: ${html?.length || 0}`);
+
+      if (!html || html.length < 100) {
+        this.log('警告：提取的内容过少，尝试备用方法');
+        const fallbackHtml = this.extractAllVisibleText();
+        if (fallbackHtml && fallbackHtml.length > html.length) {
+          this.log('使用备用方法提取内容');
+          const markdown = this.simpleConvert(fallbackHtml);
+          const title = this.getTitle();
+          
+          sendResponse({
+            success: true,
+            markdown: markdown,
+            title: title
+          });
+          return;
+        }
+      }
+
+      this.log('开始转换为Markdown...');
       const markdown = await this.convertToMarkdown(html);
+      this.log(`转换完成，Markdown长度: ${markdown.length}`);
+
       const title = this.getTitle();
 
       sendResponse({
@@ -48,6 +91,7 @@ class Html2MdConverter {
         title: title
       });
     } catch (error) {
+      this.log('转换错误:', error);
       console.error('转换错误:', error);
       sendResponse({
         success: false,
@@ -57,99 +101,208 @@ class Html2MdConverter {
   }
 
   async smartScroll() {
-    const scrollStep = 500;
-    const scrollDelay = 200;
-    const maxScrolls = 100;
+    const scrollStep = 800;
+    const scrollDelay = 300;
+    const maxScrolls = 200;
     let scrollCount = 0;
-    let lastHeight = document.body.scrollHeight;
+    let lastHeight = this.getDocumentHeight();
     let noChangeCount = 0;
+    let consecutiveSameHeight = 0;
 
-    while (scrollCount < maxScrolls && noChangeCount < 3) {
+    this.log(`初始文档高度: ${lastHeight}`);
+
+    while (scrollCount < maxScrolls && consecutiveSameHeight < 5) {
       window.scrollBy(0, scrollStep);
       await this.sleep(scrollDelay);
       
-      const newHeight = document.body.scrollHeight;
+      const newHeight = this.getDocumentHeight();
+      
       if (newHeight === lastHeight) {
         noChangeCount++;
+        consecutiveSameHeight++;
+        this.log(`高度未变化，连续次数: ${consecutiveSameHeight}`);
       } else {
         noChangeCount = 0;
+        consecutiveSameHeight = 0;
         lastHeight = newHeight;
+        this.log(`文档高度增加到: ${newHeight}`);
       }
       scrollCount++;
     }
 
+    this.log(`滚动完成，共滚动 ${scrollCount} 次`);
+    
     window.scrollTo(0, 0);
-    await this.sleep(100);
+    await this.sleep(200);
+  }
+
+  getDocumentHeight() {
+    return Math.max(
+      document.body.scrollHeight,
+      document.documentElement.scrollHeight,
+      document.body.offsetHeight,
+      document.documentElement.offsetHeight,
+      document.body.clientHeight,
+      document.documentElement.clientHeight
+    );
   }
 
   async expandFeishuContent() {
+    this.log('开始展开飞书折叠内容...');
+
     const expandSelectors = [
-      '.collapsible-block',
-      '[data-collapsible]',
-      '.toggle-block',
-      '.expand-btn',
-      '[aria-expanded="false"]'
+      '[class*="collapsible"]',
+      '[class*="toggle"]',
+      '[class*="expand"]',
+      '[aria-expanded="false"]',
+      '[data-toggle]',
+      '[data-collapsible]'
     ];
+
+    let expandedCount = 0;
 
     for (const selector of expandSelectors) {
       const elements = document.querySelectorAll(selector);
+      this.log(`找到 ${elements.length} 个元素匹配选择器: ${selector}`);
+      
       for (const el of elements) {
         try {
-          el.click();
-          await this.sleep(100);
+          const isExpanded = el.getAttribute('aria-expanded') === 'true';
+          if (!isExpanded) {
+            el.click();
+            expandedCount++;
+            await this.sleep(50);
+          }
         } catch (e) {
           // 忽略点击错误
         }
       }
     }
 
-    const codeBlocks = document.querySelectorAll('.code-block, pre code');
-    for (const block of codeBlocks) {
-      const expandBtn = block.querySelector('.expand-btn, [class*="expand"]');
-      if (expandBtn) {
+    this.log(`共展开 ${expandedCount} 个折叠内容`);
+
+    const codeExpandSelectors = [
+      '[class*="code-block"] [class*="expand"]',
+      'pre [class*="expand"]',
+      '[class*="code"] [class*="more"]'
+    ];
+
+    for (const selector of codeExpandSelectors) {
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
         try {
-          expandBtn.click();
-          await this.sleep(100);
+          el.click();
+          await this.sleep(50);
         } catch (e) {}
       }
     }
+
+    await this.sleep(200);
   }
 
   extractContent() {
     let content = null;
 
     if (this.isFeishu && this.settings.feishuOptimization) {
+      this.log('尝试提取飞书文档内容...');
       content = this.extractFeishuContent();
+      if (content) {
+        this.log(`飞书内容提取成功，长度: ${content.length}`);
+      }
     }
 
-    if (!content) {
+    if (!content || content.length < 500) {
+      this.log('尝试使用Readability提取...');
       content = this.extractWithReadability();
+      if (content) {
+        this.log(`Readability提取成功，长度: ${content.length}`);
+      }
     }
 
-    if (!content) {
+    if (!content || content.length < 500) {
+      this.log('尝试提取主要内容区域...');
       content = this.extractMainContent();
+      if (content) {
+        this.log(`主要内容提取成功，长度: ${content.length}`);
+      }
+    }
+
+    if (!content || content.length < 500) {
+      this.log('尝试提取所有可见文本...');
+      content = this.extractAllVisibleText();
+      if (content) {
+        this.log(`可见文本提取成功，长度: ${content.length}`);
+      }
     }
 
     return content;
   }
 
   extractFeishuContent() {
-    const selectors = [
-      '.doc-content',
-      '.article-content',
-      '.page-content',
+    const feishuSelectors = [
+      '[class*="docx"] [class*="content"]',
+      '[class*="doc-content"]',
+      '[class*="article-content"]',
+      '[class*="page-content"]',
       '[data-doc-content]',
-      '.feishu-doc-content',
-      '.lark-doc-content',
-      'main article',
-      'article'
+      '[class*="feishu-doc"]',
+      '[class*="lark-doc"]',
+      '[class*="editor"] [class*="content"]',
+      '[class*="renderer"] [class*="content"]',
+      'main [class*="content"]',
+      'article',
+      'main'
     ];
 
-    for (const selector of selectors) {
-      const element = document.querySelector(selector);
-      if (element) {
-        return this.cleanFeishuHtml(element.cloneNode(true));
+    this.log('尝试飞书选择器...');
+
+    for (const selector of feishuSelectors) {
+      const elements = document.querySelectorAll(selector);
+      this.log(`选择器 "${selector}" 找到 ${elements.length} 个元素`);
+      
+      for (const element of elements) {
+        const html = element.innerHTML;
+        if (html && html.length > 200) {
+          this.log(`使用选择器 "${selector}"，内容长度: ${html.length}`);
+          return this.cleanFeishuHtml(element.cloneNode(true));
+        }
       }
+    }
+
+    const allElements = document.querySelectorAll('*');
+    let bestElement = null;
+    let bestScore = 0;
+
+    for (const el of allElements) {
+      const textLength = el.textContent?.length || 0;
+      const childCount = el.children?.length || 0;
+      const tagName = el.tagName?.toLowerCase() || '';
+      
+      let score = textLength;
+      
+      if (['div', 'section', 'main', 'article'].includes(tagName)) {
+        score *= 1.5;
+      }
+      
+      if (el.className && typeof el.className === 'string') {
+        const className = el.className.toLowerCase();
+        if (className.includes('content') || className.includes('doc') || className.includes('article')) {
+          score *= 2;
+        }
+        if (className.includes('sidebar') || className.includes('nav') || className.includes('header')) {
+          score *= 0.1;
+        }
+      }
+      
+      if (score > bestScore && textLength > 100) {
+        bestScore = score;
+        bestElement = el;
+      }
+    }
+
+    if (bestElement) {
+      this.log(`找到最佳元素，标签: ${bestElement.tagName}, 文本长度: ${bestElement.textContent?.length}`);
+      return this.cleanFeishuHtml(bestElement.cloneNode(true));
     }
 
     return null;
@@ -157,24 +310,32 @@ class Html2MdConverter {
 
   cleanFeishuHtml(element) {
     const unwantedSelectors = [
-      '.comment',
-      '.comments',
-      '.toolbar',
-      '.sidebar',
-      '.navigation',
-      '.toc',
-      '.table-of-contents',
       '[class*="comment"]',
       '[class*="toolbar"]',
       '[class*="sidebar"]',
+      '[class*="navigation"]',
+      '[class*="toc"]',
+      '[class*="table-of-contents"]',
+      '[class*="header"]',
+      '[class*="footer"]',
+      '[class*="menu"]',
+      '[class*="nav"]',
       'script',
       'style',
-      'noscript'
+      'noscript',
+      'iframe',
+      'svg'
     ];
 
     for (const selector of unwantedSelectors) {
-      const elements = element.querySelectorAll(selector);
-      elements.forEach(el => el.remove());
+      try {
+        const elements = element.querySelectorAll(selector);
+        elements.forEach(el => {
+          try {
+            el.remove();
+          } catch (e) {}
+        });
+      } catch (e) {}
     }
 
     return element.innerHTML;
@@ -183,15 +344,20 @@ class Html2MdConverter {
   extractWithReadability() {
     try {
       if (typeof Readability !== 'undefined') {
+        this.log('使用Readability解析...');
         const documentClone = document.cloneNode(true);
         const reader = new Readability(documentClone);
         const article = reader.parse();
         
         if (article && article.content) {
+          this.log(`Readability解析成功，内容长度: ${article.content.length}`);
           return article.content;
         }
+      } else {
+        this.log('Readability未定义');
       }
     } catch (error) {
+      this.log('Readability解析错误:', error);
       console.error('Readability解析错误:', error);
     }
     return null;
@@ -214,19 +380,68 @@ class Html2MdConverter {
     for (const selector of selectors) {
       const element = document.querySelector(selector);
       if (element) {
-        return element.innerHTML;
+        const html = element.innerHTML;
+        if (html && html.length > 100) {
+          this.log(`使用选择器 "${selector}" 提取内容`);
+          return html;
+        }
       }
     }
 
     return document.body.innerHTML;
   }
 
+  extractAllVisibleText() {
+    this.log('提取所有可见文本...');
+    
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: function(node) {
+          const parent = node.parentElement;
+          if (!parent) return NodeFilter.FILTER_REJECT;
+          
+          const style = window.getComputedStyle(parent);
+          if (style.display === 'none' || style.visibility === 'hidden') {
+            return NodeFilter.FILTER_REJECT;
+          }
+          
+          const tagName = parent.tagName.toLowerCase();
+          if (['script', 'style', 'noscript', 'iframe', 'svg'].includes(tagName)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          
+          const text = node.textContent.trim();
+          if (text.length === 0) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+
+    const textNodes = [];
+    let node;
+    while (node = walker.nextNode()) {
+      textNodes.push(node.textContent.trim());
+    }
+
+    this.log(`找到 ${textNodes.length} 个文本节点`);
+    
+    const html = textNodes.map(text => `<p>${text}</p>`).join('');
+    return html;
+  }
+
   async convertToMarkdown(html) {
     let markdown = '';
 
     if (typeof TurndownService !== 'undefined') {
+      this.log('使用Turndown转换...');
       markdown = this.convertWithTurndown(html);
     } else {
+      this.log('Turndown未定义，使用简单转换');
       markdown = this.simpleConvert(html);
     }
 
@@ -242,15 +457,17 @@ class Html2MdConverter {
       headingStyle: 'atx',
       codeBlockStyle: 'fenced',
       bulletListMarker: '-',
-      emDelimiter: '*'
+      emDelimiter: '*',
+      strongDelimiter: '**'
     });
 
     turndownService.addRule('feishuCodeBlock', {
       filter: (node) => {
-        return node.classList && (
-          node.classList.contains('code-block') ||
-          node.classList.contains('feishu-code')
-        );
+        if (!node.classList) return false;
+        const className = node.className.toString().toLowerCase();
+        return className.includes('code-block') || 
+               className.includes('feishu-code') ||
+               className.includes('code-block');
       },
       replacement: (content, node) => {
         const code = node.textContent || '';
@@ -283,17 +500,23 @@ class Html2MdConverter {
 
     turndownService.addRule('feishuCallout', {
       filter: (node) => {
-        return node.classList && (
-          node.classList.contains('callout') ||
-          node.classList.contains('info-block') ||
-          node.classList.contains('warning-block')
-        );
+        if (!node.classList) return false;
+        const className = node.className.toString().toLowerCase();
+        return className.includes('callout') ||
+               className.includes('info-block') ||
+               className.includes('warning-block') ||
+               className.includes('highlight');
       },
       replacement: (content, node) => {
         const type = node.dataset?.type || 'info';
         const emoji = type === 'warning' ? '⚠️' : type === 'success' ? '✅' : '💡';
         return `\n> ${emoji} ${content.trim()}\n\n`;
       }
+    });
+
+    turndownService.addRule('preserveLineBreaks', {
+      filter: ['br'],
+      replacement: () => '\n'
     });
 
     return turndownService.turndown(html);
@@ -311,6 +534,7 @@ class Html2MdConverter {
 
     markdown = markdown.replace(/<p[^>]*>(.*?)<\/p>/gi, '\n$1\n');
     markdown = markdown.replace(/<br\s*\/?>/gi, '\n');
+    markdown = markdown.replace(/<div[^>]*>(.*?)<\/div>/gi, '\n$1\n');
 
     markdown = markdown.replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**');
     markdown = markdown.replace(/<b[^>]*>(.*?)<\/b>/gi, '**$1**');
@@ -364,6 +588,7 @@ class Html2MdConverter {
     markdown = markdown.replace(/\n{3,}/g, '\n\n');
     markdown = markdown.replace(/^(-|\*|\+) \s+/gm, '$1 ');
     markdown = markdown.replace(/```\s*\n/g, '```\n');
+    markdown = markdown.replace(/\n{2,}(-|\*|\+) /g, '\n$1 ');
     return markdown;
   }
 
@@ -375,15 +600,31 @@ class Html2MdConverter {
       title = ogTitle.content;
     }
 
+    const metaTitle = document.querySelector('meta[name="title"]');
+    if (metaTitle) {
+      title = metaTitle.content;
+    }
+
     const h1 = document.querySelector('h1');
     if (h1 && h1.textContent.trim()) {
       title = h1.textContent.trim();
     }
 
     if (this.isFeishu) {
-      const feishuTitle = document.querySelector('.doc-title, .article-title, [data-doc-title]');
-      if (feishuTitle && feishuTitle.textContent.trim()) {
-        title = feishuTitle.textContent.trim();
+      const feishuTitleSelectors = [
+        '[class*="doc-title"]',
+        '[class*="article-title"]',
+        '[data-doc-title]',
+        '[class*="title"] [class*="content"]',
+        'h1'
+      ];
+      
+      for (const selector of feishuTitleSelectors) {
+        const el = document.querySelector(selector);
+        if (el && el.textContent.trim()) {
+          title = el.textContent.trim();
+          break;
+        }
       }
     }
 
