@@ -1152,7 +1152,7 @@ class Html2MdConverter {
     for (const line of lines) {
       const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
       const feishuHeaderMatch = line.match(/^([一二三四五六七八九十]+[、.．]\s*.+)$/);
-      const feishuSubHeaderMatch = line.match(/^（[一二三四五六七八九十]+[）)]\s*.+)$/);
+      const feishuSubHeaderMatch = line.match(/^（[一二三四五六七八九十]+[）)]\s*.+$/);
       
       if (headerMatch || feishuHeaderMatch || feishuSubHeaderMatch) {
         if (currentSection.length > 0) {
