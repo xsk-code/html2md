@@ -1,3 +1,25 @@
+let converterInstance = null;
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('[Html2Md] 收到消息:', request);
+  
+  if (request.action === 'ping') {
+    console.log('[Html2Md] 响应 ping');
+    sendResponse({ success: true, status: 'ready' });
+    return true;
+  }
+  
+  if (request.action === 'convertToMarkdown') {
+    if (!converterInstance) {
+      converterInstance = new Html2MdConverter();
+    }
+    converterInstance.settings = request.settings || {};
+    console.log('[Html2Md] 收到转换请求', converterInstance.settings);
+    converterInstance.handleConvert(sendResponse);
+    return true;
+  }
+});
+
 class Html2MdConverter {
   constructor() {
     this.isFeishu = false;
@@ -19,7 +41,6 @@ class Html2MdConverter {
 
   init() {
     this.detectFeishu();
-    this.setupMessageListener();
     this.log('Converter initialized');
   }
 
@@ -32,25 +53,6 @@ class Html2MdConverter {
     if (this.isFeishu) {
       this.log('检测到飞书文档页面');
     }
-  }
-
-  setupMessageListener() {
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      this.log('收到消息:', request);
-      
-      if (request.action === 'ping') {
-        this.log('响应 ping');
-        sendResponse({ success: true, status: 'ready' });
-        return true;
-      }
-      
-      if (request.action === 'convertToMarkdown') {
-        this.settings = request.settings || {};
-        this.log('收到转换请求', this.settings);
-        this.handleConvert(sendResponse);
-        return true;
-      }
-    });
   }
 
   async handleConvert(sendResponse) {
@@ -233,13 +235,16 @@ class Html2MdConverter {
     let scrollCount = 0;
     let lastScrollTop = -1;
     let noChangeCount = 0;
-    let collectedTexts = new Set();
+    let collectedHtmls = new Set();
 
-    const initialContent = this.extractTextFromElement(container);
-    if (initialContent.length > 0) {
-      collectedTexts.add(initialContent);
-      this.collectedContent.push(initialContent);
-      this.log(`初始内容长度: ${initialContent.length}`);
+    const initialHtml = this.extractHtmlFromElement(container);
+    if (initialHtml && initialHtml.length > 0) {
+      const htmlHash = this.simpleHash(initialHtml);
+      if (!collectedHtmls.has(htmlHash)) {
+        collectedHtmls.add(htmlHash);
+        this.collectedContent.push(initialHtml);
+        this.log(`初始内容HTML长度: ${initialHtml.length}`);
+      }
     }
 
     while (scrollCount < maxScrolls && noChangeCount < 8) {
@@ -252,11 +257,14 @@ class Html2MdConverter {
         noChangeCount = 0;
         lastScrollTop = currentScrollTop;
         
-        const currentContent = this.extractTextFromElement(container);
-        if (currentContent.length > 0 && !collectedTexts.has(currentContent)) {
-          collectedTexts.add(currentContent);
-          this.collectedContent.push(currentContent);
-          this.log(`收集新内容，当前共 ${this.collectedContent.length} 段`);
+        const currentHtml = this.extractHtmlFromElement(container);
+        if (currentHtml && currentHtml.length > 0) {
+          const htmlHash = this.simpleHash(currentHtml);
+          if (!collectedHtmls.has(htmlHash)) {
+            collectedHtmls.add(htmlHash);
+            this.collectedContent.push(currentHtml);
+            this.log(`收集新内容HTML，当前共 ${this.collectedContent.length} 段`);
+          }
         }
       }
 
@@ -279,6 +287,51 @@ class Html2MdConverter {
     }
     
     await this.sleep(200);
+  }
+
+  simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length && i < 10000; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return hash;
+  }
+
+  extractHtmlFromElement(element) {
+    if (!element) return '';
+    
+    const clone = element.cloneNode(true);
+    
+    const unwantedSelectors = [
+      '[class*="comment"]',
+      '[class*="toolbar"]',
+      '[class*="sidebar"]',
+      '[class*="navigation"]',
+      '[class*="toc"]',
+      '[class*="table-of-contents"]',
+      '[class*="header"]',
+      '[class*="footer"]',
+      '[class*="menu"]',
+      '[class*="nav"]',
+      'script',
+      'style',
+      'noscript',
+      'iframe',
+      'svg'
+    ];
+
+    for (const selector of unwantedSelectors) {
+      try {
+        const elements = clone.querySelectorAll(selector);
+        elements.forEach(el => {
+          try { el.remove(); } catch (e) {}
+        });
+      } catch (e) {}
+    }
+
+    return clone.innerHTML;
   }
 
   extractTextFromElement(element) {
@@ -395,7 +448,6 @@ class Html2MdConverter {
             await this.sleep(50);
           }
         } catch (e) {
-          // 忽略点击错误
         }
       }
     }
@@ -857,4 +909,10 @@ class Html2MdConverter {
   }
 }
 
-const converter = new Html2MdConverter();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    converterInstance = new Html2MdConverter();
+  });
+} else {
+  converterInstance = new Html2MdConverter();
+}
