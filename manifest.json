@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "网页转Markdown助手",
+  "version": "1.0.0",
+  "description": "一键将网页转换为排版工整的Markdown文档，特别优化飞书文档等动态加载内容",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "转换为Markdown"
+  },
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "lib/readability.js",
+        "lib/turndown.js",
+        "content/content.js"
+      ],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/*", "content/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

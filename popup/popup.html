@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>网页转Markdown助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>📄 网页转Markdown</h1>
+      <p class="subtitle">一键转换，排版工整</p>
+    </header>
+
+    <div class="content">
+      <div class="options">
+        <div class="option-item">
+          <label class="checkbox-label">
+            <input type="checkbox" id="includeImages" checked>
+            <span>包含图片</span>
+          </label>
+        </div>
+        <div class="option-item">
+          <label class="checkbox-label">
+            <input type="checkbox" id="smartScroll" checked>
+            <span>智能滚动加载</span>
+          </label>
+        </div>
+        <div class="option-item">
+          <label class="checkbox-label">
+            <input type="checkbox" id="feishuOptimization" checked>
+            <span>飞书文档优化</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="action-buttons">
+        <button id="convertBtn" class="btn btn-primary">
+          <span class="btn-icon">🔄</span>
+          转换为Markdown
+        </button>
+        <button id="previewBtn" class="btn btn-secondary" style="display: none;">
+          <span class="btn-icon">👁️</span>
+          预览
+        </button>
+      </div>
+
+      <div id="status" class="status" style="display: none;">
+        <div class="status-icon">⏳</div>
+        <div class="status-text">正在处理...</div>
+      </div>
+
+      <div id="progress" class="progress" style="display: none;">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-text" id="progressText">0%</div>
+      </div>
+    </div>
+
+    <div id="result" class="result" style="display: none;">
+      <div class="result-header">
+        <span class="result-title">转换完成</span>
+        <button id="copyBtn" class="btn btn-small">复制</button>
+        <button id="downloadBtn" class="btn btn-small btn-primary">下载</button>
+      </div>
+      <div class="result-stats">
+        <span id="wordCount">字数: 0</span>
+        <span id="imageCount">图片: 0</span>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <p>v1.0.0 | 特别优化飞书文档</p>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
