@@ -363,57 +363,9 @@ class Html2MdConverter {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
     
-    const standardTags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'blockquote', 'table', 'ul', 'ol', 'li'];
+    const standardBlockTags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'blockquote'];
+    const containerTags = ['table', 'ul', 'ol'];
     const skipTags = ['script', 'style', 'noscript', 'iframe', 'svg', 'nav', 'header', 'footer'];
-    
-    const findNearestBlockElement = (node) => {
-      let current = node.parentElement;
-      let bestCandidate = null;
-      let minDepth = Infinity;
-      let depth = 0;
-      
-      while (current && current !== tempDiv) {
-        const tagName = current.tagName.toLowerCase();
-        
-        if (skipTags.includes(tagName)) {
-          return null;
-        }
-        
-        if (standardTags.includes(tagName)) {
-          if (depth < minDepth) {
-            minDepth = depth;
-            bestCandidate = current;
-          }
-        }
-        
-        current = current.parentElement;
-        depth++;
-      }
-      
-      if (bestCandidate) {
-        return bestCandidate;
-      }
-      
-      current = node.parentElement;
-      while (current && current !== tempDiv) {
-        const tagName = current.tagName.toLowerCase();
-        
-        if (skipTags.includes(tagName)) {
-          return null;
-        }
-        
-        const childCount = current.children?.length || 0;
-        const textLength = current.textContent?.trim().length || 0;
-        
-        if (childCount <= 5 && textLength > 10) {
-          return current;
-        }
-        
-        current = current.parentElement;
-      }
-      
-      return node.parentElement;
-    };
     
     const isDescendantOf = (element, ancestor) => {
       let current = element.parentElement;
@@ -426,13 +378,76 @@ class Html2MdConverter {
       return false;
     };
     
+    const isDescendantOfAny = (element, elements) => {
+      for (const el of elements) {
+        if (isDescendantOf(element, el)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    
+    const getDepth = (element) => {
+      let depth = 0;
+      let current = element.parentElement;
+      while (current && current !== tempDiv) {
+        depth++;
+        current = current.parentElement;
+      }
+      return depth;
+    };
+    
+    const collectedElements = [];
+    
+    for (const tag of standardBlockTags) {
+      const elements = tempDiv.querySelectorAll(tag);
+      for (const el of elements) {
+        const text = el.textContent?.trim() || '';
+        if (text.length > 10) {
+          collectedElements.push({
+            element: el,
+            tagName: tag,
+            text: text,
+            isStandard: true,
+            depth: getDepth(el)
+          });
+        }
+      }
+    }
+    
+    for (const tag of containerTags) {
+      const elements = tempDiv.querySelectorAll(tag);
+      for (const el of elements) {
+        const text = el.textContent?.trim() || '';
+        if (text.length > 10) {
+          collectedElements.push({
+            element: el,
+            tagName: tag,
+            text: text,
+            isStandard: true,
+            depth: getDepth(el)
+          });
+        }
+      }
+    }
+    
+    const standardElements = collectedElements.map(c => c.element);
+    const standardTexts = collectedElements.map(c => c.text);
+    
     const allElements = tempDiv.querySelectorAll('*');
-    const candidateElements = [];
     
     for (const el of allElements) {
       const tagName = el.tagName.toLowerCase();
       
       if (skipTags.includes(tagName)) {
+        continue;
+      }
+      
+      if (standardBlockTags.includes(tagName) || containerTags.includes(tagName)) {
+        continue;
+      }
+      
+      if (isDescendantOfAny(el, standardElements)) {
         continue;
       }
       
@@ -442,72 +457,66 @@ class Html2MdConverter {
         continue;
       }
       
-      candidateElements.push({
-        element: el,
-        tagName: tagName,
-        textLength: text.length,
-        childCount: el.children?.length || 0,
-        isStandardTag: standardTags.includes(tagName)
-      });
-    }
-    
-    candidateElements.sort((a, b) => {
-      if (a.isStandardTag && !b.isStandardTag) return -1;
-      if (!a.isStandardTag && b.isStandardTag) return 1;
-      return a.textLength - b.textLength;
-    });
-    
-    const finalElements = [];
-    const seenTexts = new Set();
-    
-    for (const candidate of candidateElements) {
-      const { element, textLength } = candidate;
-      const text = element.textContent.trim();
-      
       let isContained = false;
-      for (const seenText of seenTexts) {
-        if (seenText.includes(text) && seenText !== text && seenText.length > text.length) {
+      for (const standardText of standardTexts) {
+        if (standardText.includes(text) && standardText !== text) {
           isContained = true;
           break;
         }
       }
       
-      if (isContained) {
-        continue;
+      if (!isContained) {
+        collectedElements.push({
+          element: el,
+          tagName: tagName,
+          text: text,
+          isStandard: false,
+          depth: getDepth(el)
+        });
       }
+    }
+    
+    collectedElements.sort((a, b) => {
+      if (a.isStandard && !b.isStandard) return -1;
+      if (!a.isStandard && b.isStandard) return 1;
+      return a.depth - b.depth;
+    });
+    
+    const seenTexts = new Set();
+    const finalElements = [];
+    
+    for (const item of collectedElements) {
+      const { element, text, isStandard, tagName } = item;
       
-      let isDescendant = false;
-      for (const finalEl of finalElements) {
-        if (isDescendantOf(element, finalEl)) {
-          isDescendant = true;
+      let isContained = false;
+      for (const seenText of seenTexts) {
+        if (seenText.includes(text) && seenText !== text) {
+          isContained = true;
           break;
         }
       }
       
-      if (!isDescendant) {
-        finalElements.push(element);
+      if (!isContained && !seenTexts.has(text)) {
         seenTexts.add(text);
+        finalElements.push({ element, text, isStandard, tagName });
       }
     }
     
-    for (const el of finalElements) {
-      const text = el.textContent.trim();
+    for (const item of finalElements) {
+      const { element, text, isStandard, tagName } = item;
       
-      if (text && text.length > 10) {
-        const key = this.simpleHash(text.substring(0, Math.min(200, text.length)));
+      const key = this.simpleHash(text.substring(0, Math.min(200, text.length)));
+      
+      if (!result.has(key)) {
+        let htmlContent = '';
         
-        if (!result.has(key)) {
-          let htmlContent = '';
-          const tagName = el.tagName.toLowerCase();
-          
-          if (standardTags.includes(tagName)) {
-            htmlContent = el.outerHTML;
-          } else {
-            htmlContent = `<p>${text}</p>`;
-          }
-          
-          result.set(key, htmlContent);
+        if (isStandard) {
+          htmlContent = element.outerHTML;
+        } else {
+          htmlContent = `<p>${text}</p>`;
         }
+        
+        result.set(key, htmlContent);
       }
     }
     

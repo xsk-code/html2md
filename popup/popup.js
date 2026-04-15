@@ -240,12 +240,8 @@ class PopupController {
 
   generatePreviewHtml(markdown, title) {
     const safeTitle = (title || 'Markdown Preview').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const escapedMarkdown = markdown
-      .replace(/\\/g, '\\\\')
-      .replace(/'/g, "\\'")
-      .replace(/\n/g, '\\n')
-      .replace(/\r/g, '\\r')
-      .replace(/\t/g, '\\t');
+    
+    let htmlContent = this.simpleMarkdownToHtml(markdown);
     
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -253,7 +249,6 @@ class PopupController {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${safeTitle}</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -347,25 +342,109 @@ class PopupController {
   </style>
 </head>
 <body>
-  <div class="container" id="content"></div>
-  <script>
-    var markdownContent = '${escapedMarkdown}';
-    var htmlContent = '';
-    if (typeof marked !== 'undefined') {
-      if (typeof marked.parse === 'function') {
-        htmlContent = marked.parse(markdownContent);
-      } else if (typeof marked === 'function') {
-        htmlContent = marked(markdownContent);
-      }
-    }
-    if (htmlContent) {
-      document.getElementById('content').innerHTML = htmlContent;
-    } else {
-      document.getElementById('content').innerHTML = '<pre>' + markdownContent.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>';
-    }
-  </script>
+  <div class="container">
+${htmlContent}
+  </div>
 </body>
 </html>`;
+  }
+
+  simpleMarkdownToHtml(markdown) {
+    let html = markdown;
+    
+    html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+      return `<pre><code>${this.escapeHtml(code.trim())}</code></pre>`;
+    });
+    
+    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+    
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
+    
+    html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+    
+    const lines = html.split('\n');
+    const result = [];
+    let inList = false;
+    let listType = null;
+    let listItems = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      const ulMatch = line.match(/^[-*+] (.+)$/);
+      const olMatch = line.match(/^\d+\. (.+)$/);
+      
+      if (ulMatch) {
+        if (!inList || listType !== 'ul') {
+          if (inList) {
+            result.push(`</${listType}>`);
+          }
+          inList = true;
+          listType = 'ul';
+          listItems = [];
+        }
+        listItems.push(`<li>${ulMatch[1]}</li>`);
+      } else if (olMatch) {
+        if (!inList || listType !== 'ol') {
+          if (inList) {
+            result.push(`</${listType}>`);
+          }
+          inList = true;
+          listType = 'ol';
+          listItems = [];
+        }
+        listItems.push(`<li>${olMatch[1]}</li>`);
+      } else if (line.trim() === '') {
+        if (inList) {
+          result.push(`<${listType}>`);
+          result.push(...listItems);
+          result.push(`</${listType}>`);
+          inList = false;
+          listType = null;
+          listItems = [];
+        }
+        result.push('');
+      } else {
+        if (inList) {
+          result.push(`<${listType}>`);
+          result.push(...listItems);
+          result.push(`</${listType}>`);
+          inList = false;
+          listType = null;
+          listItems = [];
+        }
+        
+        if (!line.match(/^<(h[1-6]|pre|blockquote|a|img|table|tr|th|td|strong|em|code)/i)) {
+          result.push(`<p>${line}</p>`);
+        } else {
+          result.push(line);
+        }
+      }
+    }
+    
+    if (inList) {
+      result.push(`<${listType}>`);
+      result.push(...listItems);
+      result.push(`</${listType}>`);
+    }
+    
+    return result.join('\n');
+  }
+
+  escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   showToast(message) {
