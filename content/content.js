@@ -138,20 +138,48 @@ class Html2MdConverter {
     
     let allText = '';
     const uniqueParagraphs = new Set();
+    const skipTags = ['script', 'style', 'noscript', 'iframe', 'svg'];
     
     for (const content of contents) {
       const tempDiv = document.createElement('div');
       tempDiv.innerHTML = content;
       
-      const paragraphs = tempDiv.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, pre, blockquote, table');
+      const allElements = tempDiv.querySelectorAll('*');
       
-      for (const p of paragraphs) {
-        const text = p.textContent.trim();
+      for (const el of allElements) {
+        const tagName = el.tagName.toLowerCase();
+        
+        if (skipTags.includes(tagName)) {
+          continue;
+        }
+        
+        const text = el.textContent.trim();
+        
         if (text && text.length > 5) {
           const textHash = this.simpleHash(text);
+          
           if (!uniqueParagraphs.has(textHash)) {
             uniqueParagraphs.add(textHash);
-            allText += p.outerHTML + '\n';
+            
+            if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'blockquote', 'table', 'ul', 'ol', 'li'].includes(tagName)) {
+              allText += el.outerHTML + '\n';
+            } else {
+              if (tagName === 'div' || tagName === 'section' || tagName === 'article') {
+                let hasBlockChild = false;
+                for (const child of el.children) {
+                  const childTag = child.tagName.toLowerCase();
+                  if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'blockquote', 'table', 'ul', 'ol'].includes(childTag)) {
+                    hasBlockChild = true;
+                    break;
+                  }
+                }
+                if (!hasBlockChild) {
+                  allText += `<p>${text}</p>\n`;
+                }
+              } else {
+                allText += `<p>${text}</p>\n`;
+              }
+            }
           }
         }
       }
@@ -333,14 +361,93 @@ class Html2MdConverter {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
     
-    const importantElements = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, ul, ol');
+    const blockLevelTags = ['div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'pre', 'blockquote', 'td', 'th', 'section', 'article', 'table', 'ul', 'ol'];
+    const skipTags = ['script', 'style', 'noscript', 'iframe', 'svg'];
     
-    for (const el of importantElements) {
-      const text = el.textContent.trim();
-      if (text && text.length > 10) {
-        const key = this.simpleHash(text.substring(0, Math.min(200, text.length)));
+    const findBlockAncestor = (node) => {
+      let current = node.parentElement;
+      let bestCandidate = null;
+      
+      while (current && current !== tempDiv) {
+        const tagName = current.tagName.toLowerCase();
+        
+        if (skipTags.includes(tagName)) {
+          return null;
+        }
+        
+        if (blockLevelTags.includes(tagName)) {
+          bestCandidate = current;
+        }
+        
+        current = current.parentElement;
+      }
+      
+      return bestCandidate || node.parentElement;
+    };
+    
+    const walker = document.createTreeWalker(
+      tempDiv,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: (textNode) => {
+          const text = textNode.textContent.trim();
+          if (text.length === 0) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          
+          let parent = textNode.parentElement;
+          while (parent && parent !== tempDiv) {
+            const tagName = parent.tagName.toLowerCase();
+            if (skipTags.includes(tagName)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            parent = parent.parentElement;
+          }
+          
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+    
+    const seenElements = new Set();
+    
+    let textNode;
+    while (textNode = walker.nextNode()) {
+      const text = textNode.textContent.trim();
+      
+      if (text.length < 5) {
+        continue;
+      }
+      
+      const blockElement = findBlockAncestor(textNode);
+      
+      if (!blockElement || seenElements.has(blockElement)) {
+        continue;
+      }
+      
+      const elementText = blockElement.textContent.trim();
+      
+      if (elementText && elementText.length > 10) {
+        seenElements.add(blockElement);
+        
+        const key = this.simpleHash(elementText.substring(0, Math.min(200, elementText.length)));
+        
         if (!result.has(key)) {
-          result.set(key, el.outerHTML);
+          result.set(key, blockElement.outerHTML);
+        }
+      }
+    }
+    
+    if (result.size === 0) {
+      const importantElements = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, ul, ol');
+      
+      for (const el of importantElements) {
+        const text = el.textContent.trim();
+        if (text && text.length > 10) {
+          const key = this.simpleHash(text.substring(0, Math.min(200, text.length)));
+          if (!result.has(key)) {
+            result.set(key, el.outerHTML);
+          }
         }
       }
     }
