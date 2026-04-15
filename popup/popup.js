@@ -239,12 +239,20 @@ class PopupController {
   }
 
   generatePreviewHtml(markdown, title) {
+    const safeTitle = (title || 'Markdown Preview').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const escapedMarkdown = markdown
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t');
+    
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title || 'Markdown Preview'}</title>
+  <title>${safeTitle}</title>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -341,7 +349,20 @@ class PopupController {
 <body>
   <div class="container" id="content"></div>
   <script>
-    document.getElementById('content').innerHTML = marked.parse(\`${markdown.replace(/`/g, '\\`')}\`);
+    var markdownContent = '${escapedMarkdown}';
+    var htmlContent = '';
+    if (typeof marked !== 'undefined') {
+      if (typeof marked.parse === 'function') {
+        htmlContent = marked.parse(markdownContent);
+      } else if (typeof marked === 'function') {
+        htmlContent = marked(markdownContent);
+      }
+    }
+    if (htmlContent) {
+      document.getElementById('content').innerHTML = htmlContent;
+    } else {
+      document.getElementById('content').innerHTML = '<pre>' + markdownContent.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>';
+    }
   </script>
 </body>
 </html>`;
