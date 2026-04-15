@@ -83,7 +83,7 @@ class Html2MdConverter {
       
       if (this.collectedContent.length > 0) {
         this.log(`使用收集的内容，共 ${this.collectedContent.length} 段`);
-        html = this.collectedContent.join('\n');
+        html = this.mergeAndDeduplicateContent(this.collectedContent);
       }
       
       if (!html || html.length < 500) {
@@ -128,6 +128,37 @@ class Html2MdConverter {
         error: error.message
       });
     }
+  }
+
+  mergeAndDeduplicateContent(contents) {
+    if (contents.length === 0) return '';
+    if (contents.length === 1) return contents[0];
+    
+    this.log(`合并 ${contents.length} 段内容并去重...`);
+    
+    let allText = '';
+    const uniqueParagraphs = new Set();
+    
+    for (const content of contents) {
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = content;
+      
+      const paragraphs = tempDiv.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, pre, blockquote, table');
+      
+      for (const p of paragraphs) {
+        const text = p.textContent.trim();
+        if (text && text.length > 5) {
+          const textHash = this.simpleHash(text);
+          if (!uniqueParagraphs.has(textHash)) {
+            uniqueParagraphs.add(textHash);
+            allText += p.outerHTML + '\n';
+          }
+        }
+      }
+    }
+    
+    this.log(`去重后剩余 ${uniqueParagraphs.size} 个唯一段落`);
+    return allText;
   }
 
   findFeishuScrollContainer() {
@@ -229,25 +260,26 @@ class Html2MdConverter {
 
     this.log('开始飞书专用滚动...');
     
-    const scrollStep = 300;
-    const scrollDelay = 400;
-    const maxScrolls = 300;
+    const scrollStep = 500;
+    const scrollDelay = 600;
+    const maxScrolls = 200;
     let scrollCount = 0;
     let lastScrollTop = -1;
     let noChangeCount = 0;
-    let collectedHtmls = new Set();
+    let collectedHtmls = new Map();
 
     const initialHtml = this.extractHtmlFromElement(container);
     if (initialHtml && initialHtml.length > 0) {
-      const htmlHash = this.simpleHash(initialHtml);
-      if (!collectedHtmls.has(htmlHash)) {
-        collectedHtmls.add(htmlHash);
-        this.collectedContent.push(initialHtml);
-        this.log(`初始内容HTML长度: ${initialHtml.length}`);
+      const keyParagraphs = this.extractKeyParagraphs(initialHtml);
+      for (const [key, para] of keyParagraphs) {
+        if (!collectedHtmls.has(key)) {
+          collectedHtmls.set(key, para);
+        }
       }
+      this.log(`初始内容关键段落数: ${keyParagraphs.size}`);
     }
 
-    while (scrollCount < maxScrolls && noChangeCount < 8) {
+    while (scrollCount < maxScrolls && noChangeCount < 5) {
       const currentScrollTop = container.scrollTop || window.scrollY;
       
       if (currentScrollTop === lastScrollTop) {
@@ -259,11 +291,16 @@ class Html2MdConverter {
         
         const currentHtml = this.extractHtmlFromElement(container);
         if (currentHtml && currentHtml.length > 0) {
-          const htmlHash = this.simpleHash(currentHtml);
-          if (!collectedHtmls.has(htmlHash)) {
-            collectedHtmls.add(htmlHash);
-            this.collectedContent.push(currentHtml);
-            this.log(`收集新内容HTML，当前共 ${this.collectedContent.length} 段`);
+          const keyParagraphs = this.extractKeyParagraphs(currentHtml);
+          let newCount = 0;
+          for (const [key, para] of keyParagraphs) {
+            if (!collectedHtmls.has(key)) {
+              collectedHtmls.set(key, para);
+              newCount++;
+            }
+          }
+          if (newCount > 0) {
+            this.log(`新增 ${newCount} 个关键段落，当前共 ${collectedHtmls.size} 个`);
           }
         }
       }
@@ -278,7 +315,9 @@ class Html2MdConverter {
       scrollCount++;
     }
 
-    this.log(`飞书滚动完成，共滚动 ${scrollCount} 次，收集 ${this.collectedContent.length} 段内容`);
+    this.log(`飞书滚动完成，共滚动 ${scrollCount} 次，收集 ${collectedHtmls.size} 个关键段落`);
+    
+    this.collectedContent = Array.from(collectedHtmls.values());
     
     if (container === document.body) {
       window.scrollTo(0, 0);
@@ -289,14 +328,34 @@ class Html2MdConverter {
     await this.sleep(200);
   }
 
+  extractKeyParagraphs(html) {
+    const result = new Map();
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+    
+    const importantElements = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, ul, ol');
+    
+    for (const el of importantElements) {
+      const text = el.textContent.trim();
+      if (text && text.length > 10) {
+        const key = this.simpleHash(text.substring(0, Math.min(200, text.length)));
+        if (!result.has(key)) {
+          result.set(key, el.outerHTML);
+        }
+      }
+    }
+    
+    return result;
+  }
+
   simpleHash(str) {
     let hash = 0;
-    for (let i = 0; i < str.length && i < 10000; i++) {
+    for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
       hash = hash & hash;
     }
-    return hash;
+    return hash.toString();
   }
 
   extractHtmlFromElement(element) {
@@ -315,6 +374,21 @@ class Html2MdConverter {
       '[class*="footer"]',
       '[class*="menu"]',
       '[class*="nav"]',
+      '[class*="like"]',
+      '[class*="share"]',
+      '[class*="favorite"]',
+      '[class*="follow"]',
+      '[class*="recommend"]',
+      '[class*="related"]',
+      '[class*="reference"]',
+      '[class*="backlink"]',
+      '[class*="relation"]',
+      '[class*="graph"]',
+      '[class*="chart"]',
+      '[class*="progress"]',
+      '[class*="statistic"]',
+      '[class*="count"]',
+      '[class*="number"]',
       'script',
       'style',
       'noscript',
@@ -593,6 +667,33 @@ class Html2MdConverter {
       '[class*="footer"]',
       '[class*="menu"]',
       '[class*="nav"]',
+      '[class*="like"]',
+      '[class*="share"]',
+      '[class*="favorite"]',
+      '[class*="follow"]',
+      '[class*="recommend"]',
+      '[class*="related"]',
+      '[class*="reference"]',
+      '[class*="backlink"]',
+      '[class*="relation"]',
+      '[class*="graph"]',
+      '[class*="chart"]',
+      '[class*="progress"]',
+      '[class*="statistic"]',
+      '[class*="count"]',
+      '[class*="number"]',
+      '[class*="word-count"]',
+      '[class*="reading"]',
+      '[class*="time"]',
+      '[class*="date"]',
+      '[class*="author"]',
+      '[class*="editor-info"]',
+      '[class*="doc-info"]',
+      '[class*="page-info"]',
+      '[class*="article-info"]',
+      '[class*="meta"]',
+      '[class*="tags"]',
+      '[class*="category"]',
       'script',
       'style',
       'noscript',
@@ -604,9 +705,7 @@ class Html2MdConverter {
       try {
         const elements = element.querySelectorAll(selector);
         elements.forEach(el => {
-          try {
-            el.remove();
-          } catch (e) {}
+          try { el.remove(); } catch (e) {}
         });
       } catch (e) {}
     }
@@ -845,16 +944,117 @@ class Html2MdConverter {
   }
 
   postProcessMarkdown(markdown) {
-    markdown = markdown.replace(/\n{4,}/g, '\n\n\n');
-    markdown = markdown.replace(/^[ \t]+/gm, '');
-    markdown = markdown.replace(/[ \t]+$/gm, '');
-    markdown = markdown.trim();
+    this.log('开始后处理Markdown...');
+    
+    let processed = markdown;
+    
+    processed = processed.replace(/!\[.*?\]\(data:image[^)]*\)/g, '');
+    
+    processed = processed.replace(/^\s*\d+\s*字\s*$/gm, '');
+    processed = processed.replace(/^\s*\d+%\s*$/gm, '');
+    
+    processed = processed.replace(/^.*反向引用.*$/gm, '');
+    processed = processed.replace(/^.*本文引用.*$/gm, '');
+    processed = processed.replace(/^.*关系图.*$/gm, '');
+    processed = processed.replace(/^.*推荐内容.*$/gm, '');
+    processed = processed.replace(/^.*人点赞.*$/gm, '');
+    processed = processed.replace(/^.*本文暂未被.*$/gm, '');
+    
+    processed = processed.replace(/^[-*+]\s*.*?(?:点赞|评论|分享|收藏|关注|推荐|引用|反向).*$/gm, '');
+    
+    processed = processed.replace(/\n{4,}/g, '\n\n\n');
+    processed = processed.replace(/^[ \t]+/gm, '');
+    processed = processed.replace(/[ \t]+$/gm, '');
+    processed = processed.trim();
+    
+    processed = this.removeDuplicateSections(processed);
 
     if (this.isFeishu && this.settings.feishuOptimization) {
-      markdown = this.optimizeFeishuMarkdown(markdown);
+      processed = this.optimizeFeishuMarkdown(processed);
     }
 
-    return markdown;
+    this.log('后处理完成');
+    return processed;
+  }
+
+  removeDuplicateSections(markdown) {
+    const lines = markdown.split('\n');
+    const result = [];
+    const seenParagraphs = new Set();
+    const seenHeaders = new Map();
+    
+    let currentSection = [];
+    let currentHeader = null;
+    
+    for (const line of lines) {
+      const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      
+      if (headerMatch) {
+        if (currentSection.length > 0) {
+          const sectionKey = this.simpleHash(currentSection.join('\n').substring(0, 500));
+          if (!seenParagraphs.has(sectionKey)) {
+            seenParagraphs.add(sectionKey);
+            result.push(...currentSection);
+          }
+          currentSection = [];
+        }
+        
+        const headerLevel = headerMatch[1].length;
+        const headerText = headerMatch[2].trim();
+        const headerKey = `${headerLevel}:${headerText}`;
+        
+        if (seenHeaders.has(headerKey)) {
+          currentHeader = null;
+          continue;
+        }
+        
+        seenHeaders.set(headerKey, true);
+        currentHeader = headerText;
+        currentSection.push(line);
+      } else {
+        const trimmedLine = line.trim();
+        if (trimmedLine.length > 0) {
+          if (this.isNoiseLine(trimmedLine)) {
+            continue;
+          }
+        }
+        currentSection.push(line);
+      }
+    }
+    
+    if (currentSection.length > 0) {
+      const sectionKey = this.simpleHash(currentSection.join('\n').substring(0, 500));
+      if (!seenParagraphs.has(sectionKey)) {
+        result.push(...currentSection);
+      }
+    }
+    
+    return result.join('\n');
+  }
+
+  isNoiseLine(line) {
+    const noisePatterns = [
+      /^\d+\s*字$/,
+      /^\d+%$/,
+      /^反向引用/,
+      /^本文引用/,
+      /^关系图/,
+      /^推荐内容/,
+      /^人点赞$/,
+      /^本文暂未被/,
+      /^[-*+]\s*.*?(?:点赞|评论|分享|收藏|关注|推荐|引用|反向)/,
+      /^\d+\s*$/,
+      /^[-*+]\s*$/,
+      /^[>|]\s*$/
+    ];
+    
+    for (const pattern of noisePatterns) {
+      if (pattern.test(line.trim())) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   optimizeFeishuMarkdown(markdown) {
