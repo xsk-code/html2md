@@ -95,6 +95,26 @@ class PopupController {
       : '<span class="btn-icon">🔄</span> 转换为Markdown';
   }
 
+  async ensureContentScriptInjected(tabId) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+      return true;
+    } catch (error) {
+      console.log('Content script not found, injecting...');
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          files: ['lib/readability.js', 'lib/turndown.js', 'content/content.js']
+        });
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return true;
+      } catch (injectError) {
+        console.error('Failed to inject content script:', injectError);
+        return false;
+      }
+    }
+  }
+
   async handleConvert() {
     this.setButtonLoading(true);
     this.hideResult();
@@ -103,6 +123,22 @@ class PopupController {
 
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      if (!tab) {
+        throw new Error('无法获取当前标签页');
+      }
+
+      if (tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('edge://')) {
+        throw new Error('无法在浏览器内部页面使用此功能');
+      }
+
+      this.showStatus('正在检查页面状态...');
+      this.showProgress(15);
+
+      const injected = await this.ensureContentScriptInjected(tab.id);
+      if (!injected) {
+        throw new Error('无法注入脚本到当前页面，请刷新页面后重试');
+      }
       
       const settings = {
         includeImages: document.getElementById('includeImages').checked,
@@ -146,7 +182,7 @@ class PopupController {
       
       setTimeout(() => {
         this.hideStatus();
-      }, 3000);
+      }, 5000);
     } finally {
       this.setButtonLoading(false);
     }

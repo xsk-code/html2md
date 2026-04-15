@@ -36,6 +36,14 @@ class Html2MdConverter {
 
   setupMessageListener() {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      this.log('收到消息:', request);
+      
+      if (request.action === 'ping') {
+        this.log('响应 ping');
+        sendResponse({ success: true, status: 'ready' });
+        return true;
+      }
+      
       if (request.action === 'convertToMarkdown') {
         this.settings = request.settings || {};
         this.log('收到转换请求', this.settings);
