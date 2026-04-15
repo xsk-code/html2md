@@ -950,6 +950,8 @@ class Html2MdConverter {
     
     processed = processed.replace(/!\[.*?\]\(data:image[^)]*\)/g, '');
     
+    processed = this.removeDuplicateImageAndText(processed);
+    
     processed = processed.replace(/^\s*\d+\s*字\s*$/gm, '');
     processed = processed.replace(/^\s*\d+%\s*$/gm, '');
     
@@ -959,8 +961,15 @@ class Html2MdConverter {
     processed = processed.replace(/^.*推荐内容.*$/gm, '');
     processed = processed.replace(/^.*人点赞.*$/gm, '');
     processed = processed.replace(/^.*本文暂未被.*$/gm, '');
+    processed = processed.replace(/^.*评论.*$/gm, '');
+    processed = processed.replace(/^.*点赞.*$/gm, '');
+    processed = processed.replace(/^.*分享.*$/gm, '');
+    processed = processed.replace(/^.*收藏.*$/gm, '');
+    processed = processed.replace(/^.*关注.*$/gm, '');
     
     processed = processed.replace(/^[-*+]\s*.*?(?:点赞|评论|分享|收藏|关注|推荐|引用|反向).*$/gm, '');
+    
+    processed = this.fixListFormatting(processed);
     
     processed = processed.replace(/\n{4,}/g, '\n\n\n');
     processed = processed.replace(/^[ \t]+/gm, '');
@@ -968,12 +977,132 @@ class Html2MdConverter {
     processed = processed.trim();
     
     processed = this.removeDuplicateSections(processed);
+    
+    processed = this.removeNoiseLines(processed);
 
     if (this.isFeishu && this.settings.feishuOptimization) {
       processed = this.optimizeFeishuMarkdown(processed);
     }
 
     this.log('后处理完成');
+    return processed;
+  }
+
+  removeDuplicateImageAndText(markdown) {
+    const lines = markdown.split('\n');
+    const result = [];
+    const seenTexts = new Set();
+    let lastImageAlt = '';
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmedLine = line.trim();
+      
+      const imageMatch = trimmedLine.match(/^!\[(.*?)\]\((.*?)\)$/);
+      if (imageMatch) {
+        lastImageAlt = imageMatch[1].trim();
+        result.push(line);
+        continue;
+      }
+      
+      if (lastImageAlt && trimmedLine === lastImageAlt && trimmedLine.length > 0) {
+        continue;
+      }
+      
+      if (trimmedLine.length > 10) {
+        const textHash = this.simpleHash(trimmedLine);
+        if (seenTexts.has(textHash)) {
+          continue;
+        }
+        seenTexts.add(textHash);
+      }
+      
+      result.push(line);
+    }
+    
+    return result.join('\n');
+  }
+
+  fixListFormatting(markdown) {
+    const lines = markdown.split('\n');
+    const result = [];
+    let inList = false;
+    let listItemBuffer = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmedLine = line.trim();
+      
+      const listMatch = trimmedLine.match(/^([-*+•])\s*(.*)$/);
+      
+      if (listMatch) {
+        if (listItemBuffer.length > 0) {
+          result.push(listItemBuffer.join(' '));
+          listItemBuffer = [];
+        }
+        
+        const marker = listMatch[1] === '•' ? '-' : listMatch[1];
+        const content = listMatch[2].trim();
+        
+        if (content.length > 0) {
+          listItemBuffer.push(`${marker} ${content}`);
+        } else {
+          listItemBuffer.push(`${marker}`);
+        }
+        inList = true;
+      } else if (inList && trimmedLine.length > 0 && !trimmedLine.match(/^#{1,6}\s/)) {
+        if (listItemBuffer.length > 0) {
+          listItemBuffer[listItemBuffer.length - 1] += ' ' + trimmedLine;
+        } else {
+          result.push(line);
+        }
+      } else {
+        if (listItemBuffer.length > 0) {
+          result.push(listItemBuffer.join(' '));
+          listItemBuffer = [];
+        }
+        result.push(line);
+        inList = false;
+      }
+    }
+    
+    if (listItemBuffer.length > 0) {
+      result.push(listItemBuffer.join(' '));
+    }
+    
+    return result.join('\n');
+  }
+
+  removeNoiseLines(markdown) {
+    const lines = markdown.split('\n');
+    const result = [];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      
+      if (trimmed.length === 0) {
+        result.push(line);
+        continue;
+      }
+      
+      if (this.isNoiseLine(trimmed)) {
+        continue;
+      }
+      
+      if (/^[\d\s%\-+•*]+$/.test(trimmed) && trimmed.length < 20) {
+        continue;
+      }
+      
+      if (/^\d+$/.test(trimmed) && trimmed.length < 5) {
+        continue;
+      }
+      
+      result.push(line);
+    }
+    
+    let processed = result.join('\n');
+    processed = processed.replace(/\n{3,}/g, '\n\n');
+    
     return processed;
   }
 
